@@ -1,4 +1,4 @@
-// backend/models/Form.js  
+// models/Form.js  
 const mongoose = require('mongoose');  
   
 const questionSchema = new mongoose.Schema({  
@@ -11,14 +11,25 @@ const questionSchema = new mongoose.Schema({
     type: String,  
     required: true  
   },  
+  description: String,  
   required: {  
     type: Boolean,  
     default: false  
   },  
-  options: [String], // For CheckBox, Radio, and Grid types  
-  imageUrl: String,  // For Image type questions  
-  rows: [String],    // For Grid type  
-  columns: [String]  // For Grid type  
+  options: [String],  
+  imageUrl: String,  
+  rows: [String],  
+  columns: [String],  
+  validation: {  
+    minLength: Number,  
+    maxLength: Number,  
+    pattern: String,  
+    customError: String  
+  },  
+  order: {  
+    type: Number,  
+    default: 0  
+  }  
 });  
   
 const formSchema = new mongoose.Schema({  
@@ -30,6 +41,10 @@ const formSchema = new mongoose.Schema({
   description: {  
     type: String,  
     trim: true  
+  },  
+  headerImage: {  
+    url: String,  
+    fileId: String  
   },  
   questions: [questionSchema],  
   creator: {  
@@ -45,10 +60,29 @@ const formSchema = new mongoose.Schema({
     type: Boolean,  
     default: false  
   },  
-  expiresAt: Date  
+  settings: {  
+    shuffleQuestions: {  
+      type: Boolean,  
+      default: false  
+    },  
+    requireSignIn: {  
+      type: Boolean,  
+      default: false  
+    },  
+    showProgressBar: {  
+      type: Boolean,  
+      default: true  
+    },  
+    responseLimit: {  
+      type: Number,  
+      default: null  
+    }  
+  },  
+  expiresAt: Date,  
+  responseCount: {  
+    type: Number,  
+    default: 0  
+  }  
 }, {  
   timestamps: true  
 });  
-  
-const Form = mongoose.model('Form', formSchema);  
-module.exports = Form;  

@@ -1,153 +1,162 @@
-// backend/controllers/formController.js  
+// controllers/formController.js  
 const Form = require('../models/Form');  
 const Response = require('../models/Response');  
 const { createError } = require('../utils/errors');  
-
-// Create form  
+  
 exports.createForm = async (req, res, next) => {  
   try {  
-    const form = new Form({  
-      ...req.body,  
-      creator: req.user.id,  
+    const { title, description, headerImage, questions, settings } = req.body;  
+  
+    // Validate questions  
+    if (!questions || !Array.isArray(questions) || questions.length === 0) {  
+      throw createError(400, 'At least one question is required');  
+    }  
+  
+    // Validate each question  
+    questions.forEach((question, index) => {  
+      question.order = index;  
+        
+      if (!question.title) {  
+        throw createError(400, 'Question title is required');  
+      }  
+  
+      switch (question.type) {  
+        case 'Grid':  
+          if (!question.rows?.length || !question.columns?.length) {  
+            throw createError(400, `Grid question "${question.title}" requires rows and columns`);  
+          }  
+          break;  
+        case 'CheckBox':  
+        case 'Radio':  
+          if (!question.options?.length) {  
+            throw createError(400, `${question.type} question "${question.title}" requires options`);  
+          }  
+          break;  
+      }  
     });  
+  
+    const form = new Form({  
+      title,  
+      description,  
+      headerImage,  
+      questions,  
+      creator: req.user.id,  
+      settings  
+    });  
+  
     await form.save();  
     res.status(201).json(form);  
   } catch (error) {  
     next(error);  
   }  
 };  
-
-// Get all forms for a user  
-exports.getForms = async (req, res, next) => {  
-  try {  
-    const forms = await Form.find({ creator: req.user.id })  
-      .sort('-createdAt')  
-      .populate('creator', 'name email');  
-    res.json(forms);  
-  } catch (error) {  
-    next(error);  
-  }  
-};  
-
-// Get single form  
-exports.getForm = async (req, res, next) => {  
-  try {  
-    const form = await Form.findById(req.params.id)  
-      .populate('creator', 'name email');  
-
-    if (!form) {  
-      throw createError(404, 'Form not found');  
-    }  
-
-    res.json(form);  
-  } catch (error) {  
-    next(error);  
-  }  
-};  
-
-// Update form  
-exports.updateForm = async (req, res, next) => {  
-  try {  
-    const form = await Form.findOne({  
-      _id: req.params.id,  
-      creator: req.user.id  
-    });  
-
-    if (!form) {  
-      throw createError(404, 'Form not found');  
-    }  
-
-    // Prevent updating certain fields  
-    delete req.body.creator;  
-    delete req.body.createdAt;  
-
-    Object.assign(form, req.body);  
-    await form.save();  
-
-    res.json(form);  
-  } catch (error) {  
-    next(error);  
-  }  
-};  
-
-// Delete form  
-exports.deleteForm = async (req, res, next) => {  
-  try {  
-    const form = await Form.findOneAndDelete({  
-      _id: req.params.id,  
-      creator: req.user.id  
-    });  
-
-    if (!form) {  
-      throw createError(404, 'Form not found');  
-    }  
-
-    // Delete all responses associated with this form  
-    await Response.deleteMany({ form: req.params.id });  
-
-    res.json({ message: 'Form deleted successfully' });  
-  } catch (error) {  
-    next(error);  
-  }  
-};  
-
-// Submit response  
+  
 exports.submitResponse = async (req, res, next) => {  
   try {  
     const form = await Form.findById(req.params.id);  
-
     if (!form) {  
       throw createError(404, 'Form not found');  
     }  
-
+  
+    // Validate form status  
     if (!form.isPublished) {  
       throw createError(400, 'This form is not accepting responses');  
     }  
-
+  
     if (form.expiresAt && form.expiresAt < new Date()) {  
       throw createError(400, 'This form has expired');  
     }  
-
-    // Validate required questions  
-    const requiredQuestions = form.questions.filter(q => q.required);  
-    const answeredQuestions = req.body.answers.map(a => a.questionId);  
-
-    for (const question of requiredQuestions) {  
-      if (!answeredQuestions.includes(question._id.toString())) {  
-        throw createError(400, `Question "${question.title}" is required`);  
-      }  
+  
+    if (form.settings.responseLimit && form.responseCount >= form.settings.responseLimit) {  
+      throw createError(400, 'Response limit reached for this form');  
     }  
-
-    const response = new Response({  
-      form: req.params.id,  
-      respondent: form.allowAnonymous ? null : req.user.id,  
-      answers: req.body.answers  
+  
+    // Validate authentication requirement  
+    if (form.settings.requireSignIn && !req.user) {  
+      throw createError(401, 'Authentication required to submit response');  
+    }  
+  
+    // Validate answers  
+    const { answers } = req.body;  
+    if (!answers || !Array.isArray(answers)) {  
+      throw createError(400, 'Invalid response format');  
+    }  
+  
+    // Check required questions  
+    form.questions.forEach(question => {  
+      if (question.required) {  
+        const answer = answers.find(a => a.questionId.toString() === question._id.toString());  
+        if (!answer || !answer.value) {  
+          throw createError(400, `Question "${question.title}" is required`);  
+        }  
+      }  
     });  
-
+  
+    // Create response  
+    const response = new Response({  
+      form: form._id,  
+      respondent: req.user ? req.user.id : null,  
+      answers  
+    });  
+  
     await response.save();  
+  
+    // Update form response count  
+    form.responseCount += 1;  
+    await form.save();  
+  
     res.status(201).json(response);  
   } catch (error) {  
     next(error);  
   }  
 };  
-
-// Get form responses  
-exports.getResponses = async (req, res, next) => {  
+  
+exports.getFormAnalytics = async (req, res, next) => {  
   try {  
     const form = await Form.findOne({  
       _id: req.params.id,  
       creator: req.user.id  
     });  
-
+  
     if (!form) {  
       throw createError(404, 'Form not found');  
     }  
-
-    const responses = await Response.find({ form: req.params.id })  
-      .populate('respondent', 'name email')  
-      .sort('-submittedAt');  
-
-    res.json(responses);  
+  
+    const responses = await Response.find({ form: form._id });  
+  
+    // Calculate analytics  
+    const analytics = {  
+      totalResponses: responses.length,  
+      questionAnalytics: {}  
+    };  
+  
+    form.questions.forEach(question => {  
+      const questionResponses = responses.map(r =>   
+        r.answers.find(a => a.questionId.toString() === question._id.toString())  
+      ).filter(Boolean);  
+  
+      analytics.questionAnalytics[question._id] = {  
+        questionTitle: question.title,  
+        type: question.type,  
+        responseCount: questionResponses.length  
+      };  
+  
+      if (['CheckBox', 'Radio', 'Grid'].includes(question.type)) {  
+        const optionCounts = {};  
+        questionResponses.forEach(response => {  
+          if (Array.isArray(response.value)) {  
+            response.value.forEach(val => {  
+              optionCounts[val] = (optionCounts[val] || 0) + 1;  
+            });  
+          } else {  
+            optionCounts[response.value] = (optionCounts[response.value] || 0) + 1;  
+          }  
+        });  
+        analytics.questionAnalytics[question._id].optionCounts = optionCounts;  
+      }  
+    });  
+  
+    res.json(analytics);  
   } catch (error) {  
     next(error);  
   }  

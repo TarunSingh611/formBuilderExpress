@@ -143,6 +143,8 @@ jsdoc/
 
 # Misc  
 .DS_Store
+.env.*  
+!.env.example  
 .env  
 .env.local  
 .env.development.local  
