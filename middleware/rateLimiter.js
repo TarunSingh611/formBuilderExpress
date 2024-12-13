@@ -13,7 +13,14 @@ const submitResponseLimiter = rateLimit({
   message: 'Too many responses submitted, please try again later'  
 });  
 
+const progressLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 30, // limit each IP to 30 progress saves per minute
+  message: 'Too many progress saves, please try again later'
+});
+
 module.exports = {  
-  createFormLimiter,  
+  createFormLimiter, 
+  progressLimiter,
   submitResponseLimiter  
 };  

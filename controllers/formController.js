@@ -51,65 +51,64 @@ exports.createForm = async (req, res, next) => {
   }  
 };  
   
-exports.submitResponse = async (req, res, next) => {  
-  try {  
-    const form = await Form.findById(req.params.id);  
-    if (!form) {  
-      throw createError(404, 'Form not found');  
-    }  
-  
-    // Validate form status  
-    if (!form.isPublished) {  
-      throw createError(400, 'This form is not accepting responses');  
-    }  
-  
-    if (form.expiresAt && form.expiresAt < new Date()) {  
-      throw createError(400, 'This form has expired');  
-    }  
-  
-    if (form.settings.responseLimit && form.responseCount >= form.settings.responseLimit) {  
-      throw createError(400, 'Response limit reached for this form');  
-    }  
-  
-    // Validate authentication requirement  
-    if (form.settings.requireSignIn && !req.user) {  
-      throw createError(401, 'Authentication required to submit response');  
-    }  
-  
-    // Validate answers  
-    const { answers } = req.body;  
-    if (!answers || !Array.isArray(answers)) {  
-      throw createError(400, 'Invalid response format');  
-    }  
-  
-    // Check required questions  
-    form.questions.forEach(question => {  
-      if (question.required) {  
-        const answer = answers.find(a => a.questionId.toString() === question._id.toString());  
-        if (!answer || !answer.value) {  
-          throw createError(400, `Question "${question.title}" is required`);  
-        }  
-      }  
-    });  
-  
-    // Create response  
-    const response = new Response({  
-      form: form._id,  
-      respondent: req.user ? req.user.id : null,  
-      answers  
-    });  
-  
-    await response.save();  
-  
-    // Update form response count  
-    form.responseCount += 1;  
-    await form.save();  
-  
-    res.status(201).json(response);  
-  } catch (error) {  
-    next(error);  
-  }  
-};  
+exports.submitResponse = async (req, res, next) => {
+  try {
+    const { formId } = req.params;
+    const { responses } = req.body;
+    const userId = req.user?.id;
+
+    // Validate form exists and is published
+    const form = await Form.findById(formId);
+    if (!form) {
+      throw createError(404, 'Form not found');
+    }
+
+    if (!form.isPublished) {
+      throw createError(400, 'This form is not accepting responses');
+    }
+
+    // Validate required questions
+    const missingRequired = form.questions
+      .filter(q => q.required)
+      .find(q => !responses[q._id]);
+
+    if (missingRequired) {
+      throw createError(400, 'Please answer all required questions');
+    }
+
+    // Create response
+    const response = new Response({
+      form: formId,
+      respondent: userId,
+      answers: Object.entries(responses).map(([questionId, value]) => ({
+        questionId,
+        value
+      }))
+    });
+
+    await response.save();
+
+    // Update form response count
+    await Form.findByIdAndUpdate(formId, {
+      $inc: { responseCount: 1 }
+    });
+
+    // Delete progress if exists
+    if (userId) {
+      await Progress.findOneAndDelete({
+        form: formId,
+        user: userId
+      });
+    }
+
+    res.status(201).json({
+      message: 'Response submitted successfully',
+      response
+    });
+  } catch (error) {
+    next(error);
+  }
+}; 
   
 exports.getFormAnalytics = async (req, res, next) => {  
   try {  
@@ -306,4 +305,75 @@ exports.getResponses = async (req, res, next) => {
   } catch (error) {  
     next(error);  
   }  
-};  
+};
+
+// Save progress
+exports.saveProgress = async (req, res, next) => {
+  try {
+    const { formId } = req.params;
+    const { responses } = req.body;
+    const userId = req.user.id;
+
+    // Validate form exists
+    const form = await Form.findById(formId);
+    if (!form) {
+      throw createError(404, 'Form not found');
+    }
+
+    // Update or create progress
+    const progress = await Progress.findOneAndUpdate(
+      { form: formId, user: userId },
+      { 
+        responses,
+        lastUpdated: new Date()
+      },
+      { 
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true
+      }
+    );
+
+    res.json({
+      message: 'Progress saved successfully',
+      progress
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get saved progress
+exports.getProgress = async (req, res, next) => {
+  try {
+    const { formId } = req.params;
+    const userId = req.user.id;
+
+    // Validate form exists
+    const form = await Form.findById(formId);
+    if (!form) {
+      throw createError(404, 'Form not found');
+    }
+
+    // Get progress
+    const progress = await Progress.findOne({
+      form: formId,
+      user: userId
+    });
+
+    if (!progress) {
+      return res.json({
+        responses: {},
+        lastUpdated: null
+      });
+    }
+
+    res.json({
+      responses: progress.responses,
+      lastUpdated: progress.lastUpdated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
